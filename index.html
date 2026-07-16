@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Lava King’s Lava Float</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #2c120d;
+      touch-action: manipulation;
+    }
+    canvas {
+      display: block;
+      background: linear-gradient(#2c120d, #ff6a00);
+    }
+    button {
+      z-index: 1000;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  <script>
+    // —————————————————————————————
+    // PRELOAD ASSETS
+    // —————————————————————————————
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const jumpSound    = new Audio("jump.mp3");
+    const scoreSound   = new Audio("score.mp3");
+    const explodeSound = new Audio("explode.mp3");
+    const powerupSound = new Audio("powerup.mp3");
+
+    const bgImg     = new Image(); bgImg.src     = "volcano_background.jpg";
+    const headImg   = new Image(); headImg.src   = "lava_king_head_pixel.png";
+    const rockDestroy = new Image(); rockDestroy.src = "rock_destroyed.png";
+    const altRockImg = new Image(); altRockImg.src   = "alt_volcanic_rock.png";
+    const explosion  = new Image(); explosion.src    = "explosion_pixel.png";
+
+    const shieldImg = new Image(); shieldImg.src = "powerup_shield.png";
+    const boostImg  = new Image(); boostImg.src  = "powerup_speed.png";
+    const doubleImg = new Image(); doubleImg.src = "powerup_double.png";
+
+    // Glow animation frames
+    const glowFrames = [];
+    for (let i = 0; i <= 5; i++) {
+      const img = new Image();
+      img.src = `obstacle_frames/rock_glow_${i}.png`;
+      glowFrames.push(img);
+    }
+
+    // —————————————————————————————
+    // GAME STATE & CONTROL VARIABLES
+    // —————————————————————————————
+    let lavaKing = {
+      x: 50, y: canvas.height/2, width: 20, height: 20,
+      gravity: 0.6, lift: -12, velocity: 0
+    };
+    let obstacles = [], lavaBalls = [], lavaShots = [], powerUps = [];
+    let score = 0, actualScore = 0;
+    let gameOver = false, shooting = false, cooldown = false, lastScore = 0;
+    let frameIndex = 0, activePowerUp = null, powerUpTimer = 0;
+    let shootInterval;
+
+    // —————————————————————————————
+    // DRAWING FUNCTIONS
+    // —————————————————————————————
+    function drawLavaKing() {
+      ctx.globalAlpha = (Math.random() < 0.1 ? 0.85 : 1);
+      ctx.drawImage(headImg, lavaKing.x, lavaKing.y, lavaKing.width, lavaKing.height);
+      ctx.globalAlpha = 1;
+    }
+
+    function drawObstacle(obs) {
+      let texture = obs.destroyed
+        ? rockDestroy
+        : (obs.alt ? altRockImg : glowFrames[frameIndex]);
+      ctx.drawImage(texture, obs.x, obs.y, obs.width, obs.height);
+      if (obs.falling) obs.y += 2;
+    }
+
+    function drawLavaBall(ball) {
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, 10, 0, Math.PI*2);
+      ctx.fillStyle = "orange";
+      ctx.fill();
+      ctx.closePath();
+    }
+
+    function drawPowerUp(p) {
+      if (p.type==="shield") ctx.drawImage(shieldImg, p.x, p.y, 30, 30);
+      else if (p.type==="boost") ctx.drawImage(boostImg, p.x, p.y, 30, 30);
+      else if (p.type==="double") ctx.drawImage(doubleImg, p.x, p.y, 30, 30);
+    }
+
+    // —————————————————————————————
+    // SHOOTING LOGIC
+    // —————————————————————————————
+    function startShootingIfNeeded(actualScore) {
+      if (actualScore >= 1 && !shooting && !cooldown && actualScore !== lastScore) {
+        shooting = true;
+        lastScore = actualScore;
+        shootInterval = setInterval(() => {
+          lavaShots.push({ x: lavaKing.x + 30, y: lavaKing.y + 15 });
+        }, 1000);
+        setTimeout(() => {
+          shooting = false;
+          clearInterval(shootInterval);
+          cooldown = true;
+          setTimeout(() => { cooldown = false; }, 60000);
+        }, 5000);
+      }
+    }
+    function updateScore(actualScore) {
+      startShootingIfNeeded(actualScore);
+    }
+
+    // —————————————————————————————
+    // HIGH SCORE STORAGE
+    // —————————————————————————————
+    function saveHighScore(score) {
+      let scores = JSON.parse(localStorage.getItem("lavaKingScores")||"[]");
+      scores.push(score);
+      scores.sort((a,b)=>b-a);
+      scores = scores.slice(0,5);
+      localStorage.setItem("lavaKingScores", JSON.stringify(scores));
+    }
+    function showLeaderboard() {
+      let scores = JSON.parse(localStorage.getItem("lavaKingScores")||"[]");
+      ctx.fillStyle="white"; ctx.font="20px Arial";
+      ctx.fillText("🏆 Top Scores", canvas.width/2-60, canvas.height/2-20);
+      for(let i=0;i<scores.length;i++){
+        ctx.fillText(`${i+1}. ${scores[i]}`, canvas.width/2-40, canvas.height/2+10+i*25);
+      }
+    }
+
+    // —————————————————————————————
+    // END GAME & UI BUTTONS
+    // —————————————————————————————
+    function endGame() {
+      explodeSound.play();
+      ctx.drawImage(explosion, lavaKing.x-20, lavaKing.y-20, 60, 60);
+      saveHighScore(score);
+      showLeaderboard();
+      ctx.fillStyle="white"; ctx.font="48px Arial";
+      ctx.fillText("Game Over", canvas.width/2-120, canvas.height/2-130);
+
+      // Restart button
+      const restartBtn = document.createElement("button");
+      restartBtn.textContent = "Play Again";
+      Object.assign(restartBtn.style, {
+        position:"absolute", top:"calc(100% - 100px)",
+        left:"50%", transform:"translateX(-50%)",
+        padding:"1rem 2rem", fontSize:"1.2rem",
+        background:"#ff4500", color:"white",
+        border:"none", borderRadius:"8px", cursor:"pointer"
+      });
+      restartBtn.onclick = ()=>window.location.reload();
+      document.body.appendChild(restartBtn);
+
+      // Home button (top-left)
+      if(!document.getElementById("homeBtn")) {
+        const homeBtn = document.createElement("button");
+        homeBtn.id = "homeBtn";
+        homeBtn.textContent = "🏠";
+        Object.assign(homeBtn.style, {
+          position:"absolute", top:"10px", left:"10px",
+          width:"40px", height:"40px", fontSize:"1.2rem",
+          background:"#222", color:"white", border:"none",
+          borderRadius:"6px", cursor:"pointer"
+        });
+        homeBtn.onclick = ()=>window.location.href="../index.html";
+        document.body.appendChild(homeBtn);
+      }
+
+      gameOver = true;
+    }
+
+    function resetGame() {
+      lavaKing.y=canvas.height/2; lavaKing.velocity=0;
+      obstacles=[]; lavaBalls=[]; lavaShots=[]; powerUps=[];
+      score=0; actualScore=0; shooting=false; cooldown=false; lastScore=0;
+      gameOver=false;
+    }
+
+    // —————————————————————————————
+    // SPAWN FUNCTIONS
+    // —————————————————————————————
+    function spawnObstacle() {
+      let gap=220;
+      let topH = Math.random()*(canvas.height/2);
+      let bottomY=topH+gap;
+      obstacles.push(
+        { x:canvas.width, y:0, width:50, height:topH, alt:Math.random()>0.5 },
+        { x:canvas.width, y:bottomY, width:50, height:canvas.height-bottomY, 
+          falling:Math.random()<0.3, alt:Math.random()>0.5 }
+      );
+    }
+    function spawnLavaBall() {
+      let y=Math.random()*(canvas.height-100)+50;
+      lavaBalls.push({ x:canvas.width, y:y });
+    }
+
+    // —————————————————————————————
+    // GAME LOOP
+    // —————————————————————————————
+    function updateGame() {
+      if(gameOver) return;
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.drawImage(bgImg,0,0,canvas.width,canvas.height);
+
+      // Lava King physics
+      lavaKing.velocity += lavaKing.gravity;
+      lavaKing.y += lavaKing.velocity;
+      if(lavaKing.y<0||lavaKing.y+lavaKing.height>canvas.height){
+        endGame(); return;
+      }
+      drawLavaKing();
+
+      // Obstacles
+      obstacles.forEach((obs,i)=>{
+        obs.x-=3; drawObstacle(obs);
+        if(lavaKing.x<obs.x+obs.width && lavaKing.x+lavaKing.width>obs.x &&
+           lavaKing.y<obs.y+obs.height && lavaKing.y+lavaKing.height>obs.y){
+          endGame(); return;
+        }
+        if(obs.x+obs.width<0) obstacles.splice(i,1);
+      });
+
+      // Lava Balls
+      lavaBalls.forEach((ball,i)=>{
+        ball.x-=2; drawLavaBall(ball);
+        if(lavaKing.x<ball.x+10 && lavaKing.x+lavaKing.width>ball.x-10 &&
+           lavaKing.y<ball.y+10 && lavaKing.y+lavaKing.height>ball.y-10){
+          actualScore++;
+          updateScore(actualScore);
+          scoreSound.play();
+          score = activePowerUp==="double"? actualScore*2 : actualScore;
+          lavaBalls.splice(i,1);
+        }
+        if(ball.x+10<0) lavaBalls.splice(i,1);
+      });
+
+      // Power-ups
+      powerUps.forEach((p,i)=>{
+        p.x-=2; drawPowerUp(p);
+        if(lavaKing.x<p.x+30 && lavaKing.x+lavaKing.width>p.x &&
+           lavaKing.y<p.y+30 && lavaKing.y+lavaKing.height>p.y){
+          activePowerUp=p.type; powerUpTimer=600;
+          powerupSound.play(); powerUps.splice(i,1);
+        } else if(p.x+30<0){ powerUps.splice(i,1); }
+      });
+      if(powerUpTimer-->0) { if(powerUpTimer===0) activePowerUp=null; }
+
+      // Shooting (lavaShots)
+      lavaShots.forEach((shot,i)=>{
+        shot.x+=6;
+        ctx.fillStyle="orange";
+        ctx.beginPath();
+        ctx.arc(shot.x, shot.y, 6, 0, Math.PI*2);
+        ctx.fill();
+        lavaShots[i]=shot;
+        obstacles.forEach((obs,j)=>{
+          if(shot.x>obs.x && shot.x<obs.x+obs.width &&
+             shot.y>obs.y && shot.y<obs.y+obs.height){
+            if(!obs.destroyed){
+              obs.destroyed=true;
+              setTimeout(()=>{ obstacles.splice(j,1); },300);
+            }
+            lavaShots.splice(i,1);
+          }
+        });
+        if(shot.x>canvas.width) lavaShots.splice(i,1);
+      });
+
+      // Frame index for glow animation
+      frameIndex = (frameIndex+1)%glowFrames.length;
+
+      // Score & Milestones
+      ctx.fillStyle="white"; ctx.font="24px Arial";
+      ctx.fillText("Score: "+score, 20, 40);
+      [10,25,50].forEach(m=>{
+        if(score===m) ctx.fillText("🔥 Milestone: "+m+"!", 
+          canvas.width/2-100, 80);
+      });
+    }
+
+    function gameLoop() {
+      updateGame();
+      if(!gameOver) requestAnimationFrame(gameLoop);
+    }
+
+    // —————————————————————————————
+    // CONTROLS & TIMERS
+    // —————————————————————————————
+    document.addEventListener("touchstart", ()=>{
+      if(gameOver) resetGame();
+      else { lavaKing.velocity=lavaKing.lift; jumpSound.play(); }
+    });
+    document.addEventListener("keydown", ()=>{
+      if(gameOver) resetGame();
+      else { lavaKing.velocity=lavaKing.lift; jumpSound.play(); }
+    });
+
+    setInterval(spawnObstacle, 2000);
+    setInterval(spawnLavaBall, 3000);
+
+    // Countdown before start
+    let countdown = 3;
+    ctx.fillStyle="white"; ctx.font="60px Arial";
+    ctx.fillText(countdown, canvas.width/2-20, canvas.height/2);
+    const countdownInterval = setInterval(()=>{
+      countdown--;
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.drawImage(bgImg,0,0,canvas.width,canvas.height);
+      if(countdown>0){
+        ctx.fillStyle="white"; ctx.font="60px Arial";
+        ctx.fillText(countdown, canvas.width/2-20, canvas.height/2);
+      } else {
+        clearInterval(countdownInterval);
+        gameLoop();
+      }
+    }, 1000);
+
+    // Random power-up spawns
+    setInterval(()=>{
+      if(gameOver) return;
+      const types=["shield","boost","double"];
+      const type=types[Math.floor(Math.random()*types.length)];
+      const y=Math.random()*(canvas.height-60)+30;
+      powerUps.push({ x:canvas.width, y, type });
+    }, 8000);
+  </script>
+</body>
+</html>
